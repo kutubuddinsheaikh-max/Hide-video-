@@ -1,5 +1,4 @@
 
-}
 package com.example.bgrecorder;
 
 import android.app.*;
