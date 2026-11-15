@@ -1,3 +1,5 @@
+
+}
 package com.example.bgrecorder;
 
 import android.app.*;
@@ -14,34 +16,61 @@ public class RecordingService extends Service {
     private CameraDevice cameraDevice;
     private MediaRecorder mediaRecorder;
     private PowerManager.WakeLock wakeLock;
+    private boolean useFrontCamera = false;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null) {
+            useFrontCamera = intent.getBooleanExtra("USE_FRONT", false);
+        }
+
+        stopRecordingResources(); // Agar pehle se chal raha ho toh safai se band karein
+
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "App::VideoWakeLock");
-        wakeLock.acquire();
+        if (wakeLock == null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "App::VideoWakeLock");
+        }
+        if (!wakeLock.isHeld()) {
+            wakeLock.acquire();
+        }
 
         String channelId = "rec_channel";
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(channelId, "Background Service", NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
+
+        String camType = useFrontCamera ? "Selfie Camera" : "Back Camera";
         Notification notification = new NotificationCompat.Builder(this, channelId)
                 .setContentTitle("System Service")
-                .setContentText("Running in background...")
+                .setContentText("Running (" + camType + ")...")
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .build();
-        startForeground(1, notification);
 
+        startForeground(1, notification);
         startBackgroundRecording();
         return START_STICKY;
+    }
+
+    private String getCameraId(CameraManager manager, boolean front) throws CameraAccessException {
+        int targetFacing = front ? CameraCharacteristics.LENS_FACING_FRONT : CameraCharacteristics.LENS_FACING_BACK;
+        for (String id : manager.getCameraIdList()) {
+            CameraCharacteristics chars = manager.getCameraCharacteristics(id);
+            Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
+            if (facing != null && facing == targetFacing) {
+                return id;
+            }
+        }
+        return manager.getCameraIdList()[0];
     }
 
     private void startBackgroundRecording() {
         try {
             File privateDir = new File(getFilesDir(), "SavedVideos");
             if (!privateDir.exists()) privateDir.mkdirs();
-            File videoFile = new File(privateDir, "VID_" + System.currentTimeMillis() + ".mp4");
+
+            String prefix = useFrontCamera ? "SELFIE_" : "BACK_";
+            File videoFile = new File(privateDir, prefix + "VID_" + System.currentTimeMillis() + ".mp4");
 
             mediaRecorder = new MediaRecorder();
             mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
@@ -56,7 +85,7 @@ public class RecordingService extends Service {
             mediaRecorder.prepare();
 
             CameraManager manager = (CameraManager) getSystemService(CAMERA_SERVICE);
-            String cameraId = manager.getCameraIdList()[0];
+            String cameraId = getCameraId(manager, useFrontCamera);
 
             manager.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override
@@ -79,25 +108,38 @@ public class RecordingService extends Service {
                         }, null);
                     } catch (Exception e) { e.printStackTrace(); }
                 }
+
                 @Override
                 public void onDisconnected(CameraDevice camera) { camera.close(); }
+
                 @Override
                 public void onError(CameraDevice camera, int error) { camera.close(); }
             }, null);
         } catch (Exception e) { e.printStackTrace(); }
     }
 
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
+    private void stopRecordingResources() {
         try {
             if (mediaRecorder != null) {
                 mediaRecorder.stop();
                 mediaRecorder.release();
+                mediaRecorder = null;
             }
-            if (cameraDevice != null) cameraDevice.close();
-            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        } catch (Exception e) { e.printStackTrace(); }
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+        } catch (Exception e) {
+            mediaRecorder = null;
+            cameraDevice = null;
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        stopRecordingResources();
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
     }
 
     @Override
