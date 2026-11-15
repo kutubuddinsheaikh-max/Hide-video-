@@ -2,27 +2,30 @@ package com.example.bgrecorder;
 
 import android.Manifest;
 import android.content.*;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.*;
 import android.provider.MediaStore;
 import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import java.io.*;
 
 public class MainActivity extends AppCompatActivity {
+    private boolean isFrontCamera = false;
+    private boolean isRecording = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        ActivityCompat.requestPermissions(this, new String[]{
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO
-        }, 100);
-
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(40, 40, 40, 40);
+        layout.setPadding(60, 100, 60, 60);
+
+        Button btnSwitchCam = new Button(this);
+        btnSwitchCam.setText("Camera: BACK (Switch karne ke liye dabayein)");
 
         Button btnStart = new Button(this);
         btnStart.setText("Start Background Recording");
@@ -33,24 +36,47 @@ public class MainActivity extends AppCompatActivity {
         Button btnExport = new Button(this);
         btnExport.setText("Latest Video Gallery Mein Bhejein");
 
+        layout.addView(btnSwitchCam);
         layout.addView(btnStart);
         layout.addView(btnStop);
         layout.addView(btnExport);
         setContentView(layout);
 
-        btnStart.setOnClickListener(v -> {
-            Intent intent = new Intent(this, RecordingService.class);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent);
+        String[] permissions = {Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO};
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, permissions, 101);
+        }
+
+        btnSwitchCam.setOnClickListener(v -> {
+            isFrontCamera = !isFrontCamera;
+            if (isFrontCamera) {
+                btnSwitchCam.setText("Camera: SELFIE (Switch karne ke liye dabayein)");
+                Toast.makeText(this, "Selfie Camera Selected", Toast.LENGTH_SHORT).show();
             } else {
-                startService(intent);
+                btnSwitchCam.setText("Camera: BACK (Switch karne ke liye dabayein)");
+                Toast.makeText(this, "Back Camera Selected", Toast.LENGTH_SHORT).show();
             }
-            Toast.makeText(this, "Recording Shuru! Ab screen lock kar sakte hain.", Toast.LENGTH_LONG).show();
+
+            if (isRecording) {
+                Intent serviceIntent = new Intent(this, RecordingService.class);
+                serviceIntent.putExtra("USE_FRONT", isFrontCamera);
+                ContextCompat.startForegroundService(this, serviceIntent);
+            }
+        });
+
+        btnStart.setOnClickListener(v -> {
+            isRecording = true;
+            Intent serviceIntent = new Intent(this, RecordingService.class);
+            serviceIntent.putExtra("USE_FRONT", isFrontCamera);
+            ContextCompat.startForegroundService(this, serviceIntent);
+            String camName = isFrontCamera ? "Selfie Camera" : "Back Camera";
+            Toast.makeText(this, camName + " Recording Shuru!", Toast.LENGTH_SHORT).show();
         });
 
         btnStop.setOnClickListener(v -> {
+            isRecording = false;
             stopService(new Intent(this, RecordingService.class));
-            Toast.makeText(this, "Recording Ruk Gayi aur App mein Save ho gayi.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Recording Band Aur Save Ho Gayi!", Toast.LENGTH_SHORT).show();
         });
 
         btnExport.setOnClickListener(v -> exportLatestVideoToGallery());
@@ -63,26 +89,22 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Koi video nahi mili!", Toast.LENGTH_SHORT).show();
             return;
         }
+
         File latestFile = files[files.length - 1];
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Video.Media.DISPLAY_NAME, latestFile.getName());
+        values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
+        values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/MyHiddenVideos");
 
-        try {
-            ContentValues values = new ContentValues();
-            values.put(MediaStore.Video.Media.DISPLAY_NAME, latestFile.getName());
-            values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
-            values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/SafeRecorder");
+        ContentResolver resolver = getContentResolver();
+        Uri uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
 
-            Uri uri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
-            if (uri != null) {
-                try (InputStream in = new FileInputStream(latestFile);
-                     OutputStream out = getContentResolver().openOutputStream(uri)) {
-                    byte[] buf = new byte[4096];
-                    int len;
-                    while ((len = in.read(buf)) > 0) {
-                        out.write(buf, 0, len);
-                    }
-                }
-                Toast.makeText(this, "Video Gallery mein save ho gayi!", Toast.LENGTH_LONG).show();
-            }
+        try (InputStream in = new FileInputStream(latestFile);
+             OutputStream out = resolver.openOutputStream(uri)) {
+            byte[] buf = new byte[1024];
+            int len;
+            while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+            Toast.makeText(this, "Gallery mein save ho gayi!", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
